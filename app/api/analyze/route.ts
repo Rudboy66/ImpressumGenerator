@@ -40,7 +40,7 @@ const MAX_PAGES = 12;
 const MAX_TOTAL_TEXT = 55_000;
 const CRAWL_BUDGET_MS = 28_000;
 const excludedPath =
-  /(?:^|\/)(?:impressum|imprint|legal|privacy|datenschutz|terms|agb|cookies?|faq|auth|login|log-in|sign-?in|sign-?up|register|dashboard|account|admin|api)(?:\/|$)/i;
+  /(?:^|\/)(?:impressum|imprint|legal|privacy|datenschutz|terms|agb|cookies?|faq|auth|login|log-in|sign-?in|sign-?up|register|dashboard|settings|account|admin|api)(?:\/|$)/i;
 const pagePriority =
   /(?:about|ueber|über|angebot|leistungen?|services?|produkte?|product|shop|pricing|preise?|blog|magazin|news|team|creator|brand|kanal|channel)/i;
 

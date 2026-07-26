@@ -22,6 +22,63 @@ type Answers = {
   dispute: string;
   editorial: string;
   editorName: string;
+  regulatedStatus: string;
+  profession: string;
+  awardCountry: string;
+  chamber: string;
+  permitStatus: string;
+  authority: string;
+  audiovisualStatus: string;
+  mediaAuthority: string;
+};
+
+type WebsiteAnalysis = {
+  brand: string;
+  summary: string;
+  businessModel: string;
+  audience: string[];
+  offerings: string[];
+  siteTypes: string[];
+  reasons: string[];
+  confidence: number;
+  signals: {
+    commercial: boolean;
+    shop: boolean;
+    services: boolean;
+    platform: boolean;
+    editorial: boolean;
+    audiovisualPrimary: boolean;
+    regulatedProfession: boolean;
+    permitRequired: boolean;
+    consumersPossible: boolean;
+  };
+};
+
+type ScannedPage = {
+  url: string;
+  title: string;
+};
+
+const emptyAnalysis: WebsiteAnalysis = {
+  brand: "Ihre Website",
+  summary: "",
+  businessModel: "",
+  audience: [],
+  offerings: [],
+  siteTypes: [],
+  reasons: [],
+  confidence: 0,
+  signals: {
+    commercial: true,
+    shop: false,
+    services: true,
+    platform: false,
+    editorial: false,
+    audiovisualPrimary: false,
+    regulatedProfession: false,
+    permitRequired: false,
+    consumersPossible: false,
+  },
 };
 
 const initialAnswers: Answers = {
@@ -44,6 +101,14 @@ const initialAnswers: Answers = {
   dispute: "no",
   editorial: "no",
   editorName: "",
+  regulatedStatus: "yes",
+  profession: "",
+  awardCountry: "Deutschland",
+  chamber: "",
+  permitStatus: "yes",
+  authority: "",
+  audiovisualStatus: "yes",
+  mediaAuthority: "",
 };
 
 const legalForms: Record<string, string> = {
@@ -91,14 +156,12 @@ export default function Home() {
   const [urlError, setUrlError] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(0);
   const [resultOpen, setResultOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [profile, setProfile] = useState({
-    brand: "Ihre Website",
-    type: "Dienstleistung",
-    editorialSignal: false,
-  });
+  const [profile, setProfile] = useState<WebsiteAnalysis>(emptyAnalysis);
+  const [summaryDraft, setSummaryDraft] = useState("");
+  const [scannedPages, setScannedPages] = useState<ScannedPage[]>([]);
   const [answers, setAnswers] = useState(initialAnswers);
 
   const isRegistered = registeredForms.has(answers.legalForm);
@@ -162,6 +225,29 @@ export default function Home() {
       );
     }
 
+    if (answers.regulatedStatus === "yes" && answers.profession) {
+      lines.push(
+        "Berufsrechtliche Angaben",
+        `Berufsbezeichnung: ${answers.profession}`,
+        `Verliehen in: ${answers.awardCountry}`,
+        ...(answers.chamber ? [`Zuständige Kammer: ${answers.chamber}`] : []),
+        ""
+      );
+    }
+
+    if (answers.permitStatus === "yes" && answers.authority) {
+      lines.push("Zuständige Aufsichtsbehörde", answers.authority, "");
+    }
+
+    if (answers.audiovisualStatus === "yes" && answers.mediaAuthority) {
+      lines.push(
+        "Audiovisueller Mediendienst",
+        `Sitzland: ${answers.country}`,
+        `Zuständige Regulierungsbehörde: ${answers.mediaAuthority}`,
+        ""
+      );
+    }
+
     if (
       answers.consumers === "yes" &&
       (answers.employeeCount === "more" || answers.dispute === "yes")
@@ -182,41 +268,76 @@ export default function Home() {
     setAnswers((current) => ({ ...current, [field]: value }));
   }
 
-  function analyzeWebsite(event: FormEvent) {
+  function toggleSignal(
+    signal: keyof WebsiteAnalysis["signals"]
+  ) {
+    setProfile((current) => {
+      const signals = {
+        ...current.signals,
+        [signal]: !current.signals[signal],
+      };
+      if (["shop", "services", "platform"].includes(signal)) {
+        signals.commercial =
+          signals.shop || signals.services || signals.platform;
+      }
+      return { ...current, signals };
+    });
+  }
+
+  async function analyzeWebsite(event: FormEvent) {
     event.preventDefault();
     setUrlError("");
-    let parsed: URL;
 
     try {
-      parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
+      new URL(url.startsWith("http") ? url : `https://${url}`);
     } catch {
       setUrlError("Bitte geben Sie eine gültige Webadresse ein.");
       return;
     }
 
-    const host = parsed.hostname.replace(/^www\./, "");
-    const name = host.split(".")[0];
-    const label = name.charAt(0).toUpperCase() + name.slice(1);
-    const combined = `${host}${parsed.pathname}`.toLowerCase();
-    const editorialSignal = /blog|magazin|news|journal/.test(combined);
-    const type = /shop|store|laden/.test(combined)
-      ? "Onlineshop"
-      : /blog|magazin|news|journal/.test(combined)
-        ? "Blog oder Magazin"
-        : "Digitale Dienstleistung";
-
     setAnalyzing(true);
-    window.setTimeout(() => {
-      setProfile({ brand: label, type, editorialSignal });
-      setAnswers({ ...initialAnswers, brandName: label });
-      setStep(1);
-      setAnalyzing(false);
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = (await response.json()) as {
+        analysis?: WebsiteAnalysis;
+        scannedPages?: ScannedPage[];
+        error?: string;
+      };
+      if (!response.ok || !data.analysis) {
+        throw new Error(data.error || "Die Website konnte nicht geprüft werden.");
+      }
+
+      setProfile(data.analysis);
+      setSummaryDraft(data.analysis.summary);
+      setScannedPages(data.scannedPages ?? []);
+      setAnswers({
+        ...initialAnswers,
+        brandName: data.analysis.brand,
+        consumers: data.analysis.signals.consumersPossible ? "yes" : "no",
+        editorial: "no",
+      });
+      setStep(0);
       setDialogOpen(true);
-    }, 1100);
+    } catch (error) {
+      setUrlError(
+        error instanceof Error
+          ? error.message
+          : "Die Website konnte nicht geprüft werden."
+      );
+    } finally {
+      setAnalyzing(false);
+    }
   }
 
   function nextStep(event: FormEvent) {
     event.preventDefault();
+    if (step === 0) {
+      setProfile((current) => ({ ...current, summary: summaryDraft }));
+    }
     if (step < 3) {
       setStep((current) => current + 1);
       return;
@@ -269,7 +390,7 @@ export default function Home() {
               />
             </div>
             <button className="primary-button" type="submit" disabled={analyzing}>
-              {analyzing ? "Website wird geprüft …" : "Website prüfen"}
+              {analyzing ? "Website wird vollständig geprüft …" : "Website prüfen"}
               {!analyzing && <span aria-hidden="true">→</span>}
             </button>
           </div>
@@ -316,8 +437,11 @@ export default function Home() {
           >
             <div className="modal-top">
               <div>
-                <span className="modal-kicker">Schritt {step} von 3</span>
+                <span className="modal-kicker">
+                  {step === 0 ? "Website-Verständnis" : `Fragen ${step} von 3`}
+                </span>
                 <h2 id="question-title">
+                  {step === 0 && "Haben wir Ihre Website richtig verstanden?"}
                   {step === 1 && "Wer steht hinter der Website?"}
                   {step === 2 && "Wo ist der Anbieter erreichbar?"}
                   {step === 3 && "Nur noch ein paar kurze Fragen"}
@@ -333,17 +457,118 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="analysis-note">
-              <span className="scan-icon">✓</span>
-              <div>
-                <strong>Auf der Website erkannt</strong>
-                <span>
-                  {profile.brand} · {profile.type} · geschäftliches Angebot
-                </span>
+            {step > 0 && (
+              <div className="analysis-note">
+                <span className="scan-icon">✓</span>
+                <div>
+                  <strong>Bestätigtes Website-Profil</strong>
+                  <span>
+                    {profile.brand} · {profile.siteTypes.join(" · ")}
+                  </span>
+                </div>
               </div>
-            </div>
+            )}
 
             <form onSubmit={nextStep}>
+              {step === 0 && (
+                <div className="review-panel">
+                  <div className="review-status">
+                    <span className="scan-icon">✓</span>
+                    <div>
+                      <strong>{scannedPages.length} Inhaltsseiten geprüft</strong>
+                      <span>
+                        Rechtstexte, Datenschutz, AGB und FAQ wurden dabei
+                        ausgelassen.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="field full">
+                    <FieldLabel help="Diese Einordnung bestimmt, welche Teile des Fragenkatalogs anschließend angezeigt werden. Sie können den Text korrigieren.">
+                      So verstehen wir die Website
+                    </FieldLabel>
+                    <textarea
+                      className="summary-input"
+                      value={summaryDraft}
+                      onChange={(event) => setSummaryDraft(event.target.value)}
+                      rows={5}
+                      required
+                    />
+                  </div>
+
+                  <div className="detected-block">
+                    <span>Erkannt</span>
+                    <div className="tag-list">
+                      {[
+                        ...profile.siteTypes,
+                        ...profile.offerings,
+                        ...profile.audience,
+                      ].map((item) => (
+                        <span className="detected-tag" key={item}>
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="detected-block">
+                    <span>Was trifft auf die Website zu?</span>
+                    <div className="signal-grid">
+                      {[
+                        ["shop", "Warenverkauf"],
+                        ["services", "Dienstleistungen"],
+                        ["platform", "Plattform oder Software"],
+                        ["consumersPossible", "Privatkunden möglich"],
+                        ["editorial", "Journalistische Inhalte"],
+                        ["audiovisualPrimary", "Videos als Hauptangebot"],
+                        ["regulatedProfession", "Reglementierter Beruf"],
+                        ["permitRequired", "Besondere Erlaubnis nötig"],
+                      ].map(([signal, label]) => {
+                        const key =
+                          signal as keyof WebsiteAnalysis["signals"];
+                        const active = profile.signals[key];
+                        return (
+                          <button
+                            className={`signal-toggle${active ? " active" : ""}`}
+                            type="button"
+                            key={signal}
+                            aria-pressed={active}
+                            onClick={() => toggleSignal(key)}
+                          >
+                            <span>{active ? "✓" : "+"}</span>
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <small className="signal-help">
+                      Tippen Sie auf einen Punkt, wenn unsere Einordnung nicht
+                      stimmt.
+                    </small>
+                  </div>
+
+                  <div className="evidence-list">
+                    {profile.reasons.map((reason) => (
+                      <span key={reason}>
+                        <b aria-hidden="true">✓</b> {reason}
+                      </span>
+                    ))}
+                  </div>
+
+                  <details className="scanned-details">
+                    <summary>Geprüfte Seiten anzeigen</summary>
+                    <ul>
+                      {scannedPages.map((page) => (
+                        <li key={page.url}>
+                          <span>{page.title}</span>
+                          <small>{new URL(page.url).pathname || "/"}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                </div>
+              )}
+
               {step === 1 && (
                 <div className="form-grid">
                   <div className="field full">
@@ -499,6 +724,7 @@ export default function Home() {
                     </>
                   )}
 
+                  {profile.signals.commercial && (
                   <div className="field full">
                     <FieldLabel help="Nicht gemeint sind Ihre persönliche Steuer-ID oder die normale Steuernummer.">
                       Haben Sie eine Umsatzsteuer-ID?
@@ -526,8 +752,9 @@ export default function Home() {
                       </label>
                     </div>
                   </div>
+                  )}
 
-                  {answers.vatStatus === "yes" && (
+                  {profile.signals.commercial && answers.vatStatus === "yes" && (
                     <div className="field full">
                       <FieldLabel>Umsatzsteuer-ID</FieldLabel>
                       <input
@@ -539,6 +766,7 @@ export default function Home() {
                     </div>
                   )}
 
+                  {profile.signals.consumersPossible && (
                   <div className="field full">
                     <FieldLabel help="Verbraucher sind Personen, die nicht für ein Unternehmen oder ihre selbstständige Tätigkeit handeln.">
                       Können auch Privatpersonen Verträge abschließen?
@@ -566,8 +794,10 @@ export default function Home() {
                       </label>
                     </div>
                   </div>
+                  )}
 
-                  {answers.consumers === "yes" && (
+                  {profile.signals.consumersPossible &&
+                    answers.consumers === "yes" && (
                     <>
                       <div className="field">
                         <FieldLabel>Wie viele Beschäftigte gibt es?</FieldLabel>
@@ -594,7 +824,7 @@ export default function Home() {
                     </>
                   )}
 
-                  {profile.editorialSignal && (
+                  {profile.signals.editorial && (
                     <div className="field full">
                       <FieldLabel help="Gemeint sind regelmäßig veröffentlichte Nachrichten, Berichte oder gesellschaftliche Kommentare.">
                         Gibt es journalistische Inhalte?
@@ -609,7 +839,7 @@ export default function Home() {
                     </div>
                   )}
 
-                  {profile.editorialSignal && answers.editorial === "yes" && (
+                  {profile.signals.editorial && answers.editorial === "yes" && (
                     <div className="field full">
                       <FieldLabel>Redaktionell verantwortliche Person</FieldLabel>
                       <input
@@ -620,11 +850,167 @@ export default function Home() {
                       />
                     </div>
                   )}
+
+                  {profile.signals.regulatedProfession && (
+                    <>
+                      <div className="field full section-label">
+                        <strong>Reglementierter Beruf erkannt</strong>
+                        <span>
+                          Die Website nennt einen Beruf mit besonderen
+                          Pflichtangaben.
+                        </span>
+                      </div>
+                      <div className="field full">
+                        <FieldLabel>
+                          Wird dieser Beruf tatsächlich angeboten?
+                        </FieldLabel>
+                        <select
+                          value={answers.regulatedStatus}
+                          onChange={(event) =>
+                            update("regulatedStatus", event.target.value)
+                          }
+                        >
+                          <option value="yes">Ja</option>
+                          <option value="no">Nein</option>
+                        </select>
+                      </div>
+                      {answers.regulatedStatus === "yes" && (
+                        <>
+                          <div className="field">
+                            <FieldLabel>Gesetzliche Berufsbezeichnung</FieldLabel>
+                            <input
+                              value={answers.profession}
+                              onChange={(event) =>
+                                update("profession", event.target.value)
+                              }
+                              placeholder="z. B. Rechtsanwalt"
+                              required
+                            />
+                          </div>
+                          <div className="field">
+                            <FieldLabel>Verleihungsstaat</FieldLabel>
+                            <input
+                              value={answers.awardCountry}
+                              onChange={(event) =>
+                                update("awardCountry", event.target.value)
+                              }
+                              required
+                            />
+                          </div>
+                          <div className="field full">
+                            <FieldLabel>Zuständige Kammer</FieldLabel>
+                            <input
+                              value={answers.chamber}
+                              onChange={(event) =>
+                                update("chamber", event.target.value)
+                              }
+                              placeholder="Vollständiger Name der Kammer"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {profile.signals.permitRequired && (
+                    <>
+                      <div className="field full section-label">
+                        <strong>Erlaubnispflichtige Tätigkeit erkannt</strong>
+                        <span>
+                          Für diese Tätigkeit kann eine Aufsichtsbehörde genannt
+                          werden müssen.
+                        </span>
+                      </div>
+                      <div className="field">
+                        <FieldLabel>Ist eine Erlaubnis erforderlich?</FieldLabel>
+                        <select
+                          value={answers.permitStatus}
+                          onChange={(event) =>
+                            update("permitStatus", event.target.value)
+                          }
+                        >
+                          <option value="yes">Ja</option>
+                          <option value="no">Nein</option>
+                        </select>
+                      </div>
+                      {answers.permitStatus === "yes" && (
+                        <div className="field">
+                          <FieldLabel>Zuständige Behörde</FieldLabel>
+                          <input
+                            value={answers.authority}
+                            onChange={(event) =>
+                              update("authority", event.target.value)
+                            }
+                            placeholder="Name und Anschrift"
+                            required
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {profile.signals.audiovisualPrimary && (
+                    <>
+                      <div className="field full section-label">
+                        <strong>Videos als Hauptangebot erkannt</strong>
+                        <span>
+                          Wir fragen deshalb nach dem Modul für audiovisuelle
+                          Mediendienste.
+                        </span>
+                      </div>
+                      <div className="field">
+                        <FieldLabel>
+                          Trifft der Anbieter die redaktionellen Entscheidungen?
+                        </FieldLabel>
+                        <select
+                          value={answers.audiovisualStatus}
+                          onChange={(event) =>
+                            update("audiovisualStatus", event.target.value)
+                          }
+                        >
+                          <option value="yes">Ja</option>
+                          <option value="no">Nein</option>
+                        </select>
+                      </div>
+                      {answers.audiovisualStatus === "yes" && (
+                        <div className="field">
+                          <FieldLabel>Zuständige Medienbehörde</FieldLabel>
+                          <input
+                            value={answers.mediaAuthority}
+                            onChange={(event) =>
+                              update("mediaAuthority", event.target.value)
+                            }
+                            placeholder="Name der Behörde"
+                            required
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {!isRegistered &&
+                    !profile.signals.commercial &&
+                    !profile.signals.consumersPossible &&
+                    !profile.signals.editorial &&
+                    !profile.signals.regulatedProfession &&
+                    !profile.signals.permitRequired &&
+                    !profile.signals.audiovisualPrimary && (
+                      <div className="field full quiet-result">
+                        <span className="scan-icon">✓</span>
+                        <div>
+                          <strong>Keine weiteren Fragen nötig</strong>
+                          <span>
+                            Für dieses Website-Profil wurden keine zusätzlichen
+                            Module aktiviert.
+                          </span>
+                        </div>
+                      </div>
+                    )}
                 </div>
               )}
 
               <div className="modal-actions">
-                {step > 1 ? (
+                {step > 0 ? (
                   <button
                     className="secondary-button"
                     type="button"
@@ -636,13 +1022,17 @@ export default function Home() {
                   <span />
                 )}
                 <button className="primary-button" type="submit">
-                  {step === 3 ? "Impressum erstellen" : "Weiter"}
+                  {step === 0
+                    ? "Ja, so passt es"
+                    : step === 3
+                      ? "Impressum erstellen"
+                      : "Weiter"}
                   <span aria-hidden="true">→</span>
                 </button>
               </div>
             </form>
             <div className="progress">
-              <span style={{ width: `${(step / 3) * 100}%` }} />
+              <span style={{ width: `${((step + 1) / 4) * 100}%` }} />
             </div>
           </section>
         </div>

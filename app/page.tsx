@@ -41,6 +41,11 @@ type WebsiteAnalysis = {
   siteTypes: string[];
   reasons: string[];
   confidence: number;
+  operatingPurpose?: string;
+  monetization?: string[];
+  userJourney?: string[];
+  legalRelevanceSummary?: string;
+  coverageNotes?: string[];
   signals: {
     commercial: boolean;
     shop: boolean;
@@ -52,6 +57,16 @@ type WebsiteAnalysis = {
     permitRequired: boolean;
     consumersPossible: boolean;
   };
+};
+
+type QuestionAssessment = {
+  id: keyof Answers;
+  state: "resolved" | "confirm" | "ask" | "omit";
+  suggestedValue: string;
+  confidence: number;
+  reason: string;
+  evidence: string[];
+  sourceUrls: string[];
 };
 
 type ScannedPage = {
@@ -138,14 +153,28 @@ function Info({ text }: { text: string }) {
 function FieldLabel({
   children,
   help,
+  assessment,
 }: {
   children: React.ReactNode;
   help?: string;
+  assessment?: QuestionAssessment;
 }) {
   return (
     <label className="field-label">
       <span>
         {children} {help && <Info text={help} />}
+        {assessment && assessment.state !== "omit" && (
+          <span
+            className={`ai-cue ${assessment.state}`}
+            title={assessment.reason}
+          >
+            {assessment.state === "confirm"
+              ? "KI-Vorschlag · bitte prüfen"
+              : assessment.state === "resolved"
+                ? "von KI erkannt"
+                : "noch offen"}
+          </span>
+        )}
       </span>
     </label>
   );
@@ -162,7 +191,25 @@ export default function Home() {
   const [profile, setProfile] = useState<WebsiteAnalysis>(emptyAnalysis);
   const [summaryDraft, setSummaryDraft] = useState("");
   const [scannedPages, setScannedPages] = useState<ScannedPage[]>([]);
+  const [questionPlan, setQuestionPlan] = useState<QuestionAssessment[]>([]);
+  const [auditSummary, setAuditSummary] = useState("");
+  const [analysisWarnings, setAnalysisWarnings] = useState<string[]>([]);
   const [answers, setAnswers] = useState(initialAnswers);
+
+  const assessmentById = useMemo(
+    () =>
+      Object.fromEntries(questionPlan.map((item) => [item.id, item])) as Partial<
+        Record<keyof Answers, QuestionAssessment>
+      >,
+    [questionPlan]
+  );
+
+  const resolvedQuestions = questionPlan.filter(
+    (item) => item.state === "resolved" && item.suggestedValue
+  );
+  const openQuestionCount = questionPlan.filter(
+    (item) => item.state === "ask" || item.state === "confirm"
+  ).length;
 
   const isRegistered = registeredForms.has(answers.legalForm);
   const needsRepresentative = representedForms.has(answers.legalForm);
@@ -268,6 +315,11 @@ export default function Home() {
     setAnswers((current) => ({ ...current, [field]: value }));
   }
 
+  function needsQuestion(field: keyof Answers) {
+    const state = assessmentById[field]?.state;
+    return state !== "resolved" && state !== "omit";
+  }
+
   function toggleSignal(
     signal: keyof WebsiteAnalysis["signals"]
   ) {
@@ -305,6 +357,9 @@ export default function Home() {
       const data = (await response.json()) as {
         analysis?: WebsiteAnalysis;
         scannedPages?: ScannedPage[];
+        questionPlan?: QuestionAssessment[];
+        auditSummary?: string;
+        warnings?: string[];
         error?: string;
       };
       if (!response.ok || !data.analysis) {
@@ -314,11 +369,27 @@ export default function Home() {
       setProfile(data.analysis);
       setSummaryDraft(data.analysis.summary);
       setScannedPages(data.scannedPages ?? []);
+      const plan = data.questionPlan ?? [];
+      const suggestions = Object.fromEntries(
+        plan
+          .filter(
+            (item) =>
+              item.state !== "omit" &&
+              item.suggestedValue &&
+              item.id in initialAnswers
+          )
+          .map((item) => [item.id, item.suggestedValue])
+      ) as Partial<Answers>;
+      setQuestionPlan(plan);
+      setAuditSummary(data.auditSummary ?? "");
+      setAnalysisWarnings(data.warnings ?? []);
       setAnswers({
         ...initialAnswers,
+        ...suggestions,
         brandName: data.analysis.brand,
-        consumers: data.analysis.signals.consumersPossible ? "yes" : "no",
-        editorial: "no",
+        ...(suggestions.brandName
+          ? { brandName: suggestions.brandName }
+          : {}),
       });
       setStep(0);
       setDialogOpen(true);
@@ -496,6 +567,65 @@ export default function Home() {
                     />
                   </div>
 
+                  <div className="ai-audit-card">
+                    <div>
+                      <span className="ai-mark">AI</span>
+                      <div>
+                        <strong>KI-Prüfung des Fragenkatalogs</strong>
+                        <p>{auditSummary}</p>
+                      </div>
+                    </div>
+                    <div className="audit-stats">
+                      <span>
+                        <b>{resolvedQuestions.length}</b> sicher erkannt
+                      </span>
+                      <span>
+                        <b>{openQuestionCount}</b> zu bestätigen oder offen
+                      </span>
+                    </div>
+                  </div>
+
+                  {resolvedQuestions.length > 0 && (
+                    <div className="detected-block">
+                      <span>Mit hoher Sicherheit bereits beantwortet</span>
+                      <div className="resolved-list">
+                        {resolvedQuestions.map((item) => (
+                          <span key={item.id} title={item.reason}>
+                            <b>✓</b> {item.suggestedValue}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {analysisWarnings.length > 0 && (
+                    <div className="analysis-warnings">
+                      {analysisWarnings.map((warning) => (
+                        <span key={warning}>Hinweis: {warning}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {(profile.operatingPurpose || profile.businessModel) && (
+                    <div className="dossier-grid">
+                      <div>
+                        <span>Zweck und Geschäftsmodell</span>
+                        <strong>
+                          {profile.operatingPurpose || profile.businessModel}
+                        </strong>
+                        <p>{profile.businessModel}</p>
+                      </div>
+                      <div>
+                        <span>Typischer Nutzerweg</span>
+                        <strong>
+                          {profile.userJourney?.join(" → ") ||
+                            "Informationen ansehen und Kontakt aufnehmen"}
+                        </strong>
+                        <p>{profile.legalRelevanceSummary}</p>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="detected-block">
                     <span>Erkannt</span>
                     <div className="tag-list">
@@ -572,7 +702,7 @@ export default function Home() {
               {step === 1 && (
                 <div className="form-grid">
                   <div className="field full">
-                    <FieldLabel help="Gemeint ist die Person oder Organisation, die rechtlich für die Website verantwortlich ist.">
+                    <FieldLabel assessment={assessmentById.legalForm} help="Gemeint ist die Person oder Organisation, die rechtlich für die Website verantwortlich ist.">
                       Wer betreibt die Website?
                     </FieldLabel>
                     <select
@@ -585,7 +715,7 @@ export default function Home() {
                     </select>
                   </div>
                   <div className="field full">
-                    <FieldLabel help="Bitte den echten Namen angeben. Ein Markenname allein reicht nicht aus.">
+                    <FieldLabel assessment={assessmentById.legalName} help="Bitte den echten Namen angeben. Ein Markenname allein reicht nicht aus.">
                       Vollständiger rechtlicher Name
                     </FieldLabel>
                     <input
@@ -599,8 +729,9 @@ export default function Home() {
                       required
                     />
                   </div>
+                  {needsQuestion("brandName") && (
                   <div className="field full">
-                    <FieldLabel help="Dieser Name wurde aus der Webadresse abgeleitet. Sie können ihn ändern.">
+                    <FieldLabel assessment={assessmentById.brandName} help="Dieser Name wurde von der KI aus den Website-Inhalten abgeleitet. Sie können ihn ändern.">
                       Geschäfts- oder Markenname
                     </FieldLabel>
                     <input
@@ -608,10 +739,11 @@ export default function Home() {
                       onChange={(event) => update("brandName", event.target.value)}
                     />
                   </div>
+                  )}
                   {needsRepresentative && (
                     <>
                       <div className="field">
-                        <FieldLabel>Vertretungsberechtigte Person</FieldLabel>
+                        <FieldLabel assessment={assessmentById.representative}>Vertretungsberechtigte Person</FieldLabel>
                         <input
                           value={answers.representative}
                           onChange={(event) =>
@@ -622,7 +754,7 @@ export default function Home() {
                         />
                       </div>
                       <div className="field">
-                        <FieldLabel>Funktion</FieldLabel>
+                        <FieldLabel assessment={assessmentById.representativeRole}>Funktion</FieldLabel>
                         <input
                           value={answers.representativeRole}
                           onChange={(event) =>
@@ -640,7 +772,7 @@ export default function Home() {
               {step === 2 && (
                 <div className="form-grid">
                   <div className="field full">
-                    <FieldLabel help="An diese Anschrift müssen rechtlich wichtige Briefe zugestellt werden können. Ein Postfach genügt nicht.">
+                    <FieldLabel assessment={assessmentById.street} help="An diese Anschrift müssen rechtlich wichtige Briefe zugestellt werden können. Ein Postfach genügt nicht.">
                       Straße und Hausnummer
                     </FieldLabel>
                     <input
@@ -651,7 +783,7 @@ export default function Home() {
                     />
                   </div>
                   <div className="field compact">
-                    <FieldLabel>Postleitzahl</FieldLabel>
+                    <FieldLabel assessment={assessmentById.zip}>Postleitzahl</FieldLabel>
                     <input
                       value={answers.zip}
                       onChange={(event) => update("zip", event.target.value)}
@@ -660,7 +792,7 @@ export default function Home() {
                     />
                   </div>
                   <div className="field">
-                    <FieldLabel>Ort</FieldLabel>
+                    <FieldLabel assessment={assessmentById.city}>Ort</FieldLabel>
                     <input
                       value={answers.city}
                       onChange={(event) => update("city", event.target.value)}
@@ -669,7 +801,7 @@ export default function Home() {
                     />
                   </div>
                   <div className="field full">
-                    <FieldLabel>Land</FieldLabel>
+                    <FieldLabel assessment={assessmentById.country}>Land</FieldLabel>
                     <input
                       value={answers.country}
                       onChange={(event) => update("country", event.target.value)}
@@ -677,7 +809,7 @@ export default function Home() {
                     />
                   </div>
                   <div className="field full">
-                    <FieldLabel help="Verwenden Sie eine Adresse, die regelmäßig gelesen wird.">
+                    <FieldLabel assessment={assessmentById.email} help="Verwenden Sie eine Adresse, die regelmäßig gelesen wird.">
                       E-Mail-Adresse
                     </FieldLabel>
                     <input
@@ -700,7 +832,7 @@ export default function Home() {
                         <span>Diese Angaben brauchen wir wegen Ihrer Rechtsform.</span>
                       </div>
                       <div className="field">
-                        <FieldLabel>Registergericht</FieldLabel>
+                        <FieldLabel assessment={assessmentById.registerCourt}>Registergericht</FieldLabel>
                         <input
                           value={answers.registerCourt}
                           onChange={(event) =>
@@ -711,7 +843,7 @@ export default function Home() {
                         />
                       </div>
                       <div className="field">
-                        <FieldLabel>Registernummer</FieldLabel>
+                        <FieldLabel assessment={assessmentById.registerNumber}>Registernummer</FieldLabel>
                         <input
                           value={answers.registerNumber}
                           onChange={(event) =>
@@ -724,9 +856,9 @@ export default function Home() {
                     </>
                   )}
 
-                  {profile.signals.commercial && (
+                  {profile.signals.commercial && needsQuestion("vatStatus") && (
                   <div className="field full">
-                    <FieldLabel help="Nicht gemeint sind Ihre persönliche Steuer-ID oder die normale Steuernummer.">
+                    <FieldLabel assessment={assessmentById.vatStatus} help="Nicht gemeint sind Ihre persönliche Steuer-ID oder die normale Steuernummer.">
                       Haben Sie eine Umsatzsteuer-ID?
                     </FieldLabel>
                     <div className="choice-row">
@@ -754,9 +886,9 @@ export default function Home() {
                   </div>
                   )}
 
-                  {profile.signals.commercial && answers.vatStatus === "yes" && (
+                  {profile.signals.commercial && answers.vatStatus === "yes" && needsQuestion("vatId") && (
                     <div className="field full">
-                      <FieldLabel>Umsatzsteuer-ID</FieldLabel>
+                      <FieldLabel assessment={assessmentById.vatId}>Umsatzsteuer-ID</FieldLabel>
                       <input
                         value={answers.vatId}
                         onChange={(event) => update("vatId", event.target.value)}
@@ -766,9 +898,9 @@ export default function Home() {
                     </div>
                   )}
 
-                  {profile.signals.consumersPossible && (
+                  {profile.signals.consumersPossible && needsQuestion("consumers") && (
                   <div className="field full">
-                    <FieldLabel help="Verbraucher sind Personen, die nicht für ein Unternehmen oder ihre selbstständige Tätigkeit handeln.">
+                    <FieldLabel assessment={assessmentById.consumers} help="Verbraucher sind Personen, die nicht für ein Unternehmen oder ihre selbstständige Tätigkeit handeln.">
                       Können auch Privatpersonen Verträge abschließen?
                     </FieldLabel>
                     <div className="choice-row">
@@ -797,10 +929,12 @@ export default function Home() {
                   )}
 
                   {profile.signals.consumersPossible &&
-                    answers.consumers === "yes" && (
+                    answers.consumers === "yes" &&
+                    (needsQuestion("employeeCount") || needsQuestion("dispute")) && (
                     <>
+                      {needsQuestion("employeeCount") && (
                       <div className="field">
-                        <FieldLabel>Wie viele Beschäftigte gibt es?</FieldLabel>
+                        <FieldLabel assessment={assessmentById.employeeCount}>Wie viele Beschäftigte gibt es?</FieldLabel>
                         <select
                           value={answers.employeeCount}
                           onChange={(event) =>
@@ -811,8 +945,10 @@ export default function Home() {
                           <option value="more">Mehr als 10</option>
                         </select>
                       </div>
+                      )}
+                      {needsQuestion("dispute") && (
                       <div className="field">
-                        <FieldLabel>Teilnahme an einer Schlichtung?</FieldLabel>
+                        <FieldLabel assessment={assessmentById.dispute}>Teilnahme an einer Schlichtung?</FieldLabel>
                         <select
                           value={answers.dispute}
                           onChange={(event) => update("dispute", event.target.value)}
@@ -821,12 +957,13 @@ export default function Home() {
                           <option value="yes">Ja</option>
                         </select>
                       </div>
+                      )}
                     </>
                   )}
 
-                  {profile.signals.editorial && (
+                  {profile.signals.editorial && needsQuestion("editorial") && (
                     <div className="field full">
-                      <FieldLabel help="Gemeint sind regelmäßig veröffentlichte Nachrichten, Berichte oder gesellschaftliche Kommentare.">
+                      <FieldLabel assessment={assessmentById.editorial} help="Ein gewöhnlicher Unternehmensblog ist nicht automatisch journalistisch-redaktionell.">
                         Gibt es journalistische Inhalte?
                       </FieldLabel>
                       <select
@@ -839,9 +976,9 @@ export default function Home() {
                     </div>
                   )}
 
-                  {profile.signals.editorial && answers.editorial === "yes" && (
+                  {profile.signals.editorial && answers.editorial === "yes" && needsQuestion("editorName") && (
                     <div className="field full">
-                      <FieldLabel>Redaktionell verantwortliche Person</FieldLabel>
+                      <FieldLabel assessment={assessmentById.editorName}>Redaktionell verantwortliche Person</FieldLabel>
                       <input
                         value={answers.editorName}
                         onChange={(event) => update("editorName", event.target.value)}
@@ -860,8 +997,9 @@ export default function Home() {
                           Pflichtangaben.
                         </span>
                       </div>
+                      {needsQuestion("regulatedStatus") && (
                       <div className="field full">
-                        <FieldLabel>
+                        <FieldLabel assessment={assessmentById.regulatedStatus}>
                           Wird dieser Beruf tatsächlich angeboten?
                         </FieldLabel>
                         <select
@@ -874,10 +1012,12 @@ export default function Home() {
                           <option value="no">Nein</option>
                         </select>
                       </div>
+                      )}
                       {answers.regulatedStatus === "yes" && (
                         <>
+                          {needsQuestion("profession") && (
                           <div className="field">
-                            <FieldLabel>Gesetzliche Berufsbezeichnung</FieldLabel>
+                            <FieldLabel assessment={assessmentById.profession}>Gesetzliche Berufsbezeichnung</FieldLabel>
                             <input
                               value={answers.profession}
                               onChange={(event) =>
@@ -887,8 +1027,10 @@ export default function Home() {
                               required
                             />
                           </div>
+                          )}
+                          {needsQuestion("awardCountry") && (
                           <div className="field">
-                            <FieldLabel>Verleihungsstaat</FieldLabel>
+                            <FieldLabel assessment={assessmentById.awardCountry}>Verleihungsstaat</FieldLabel>
                             <input
                               value={answers.awardCountry}
                               onChange={(event) =>
@@ -897,8 +1039,10 @@ export default function Home() {
                               required
                             />
                           </div>
+                          )}
+                          {needsQuestion("chamber") && (
                           <div className="field full">
-                            <FieldLabel>Zuständige Kammer</FieldLabel>
+                            <FieldLabel assessment={assessmentById.chamber}>Zuständige Kammer</FieldLabel>
                             <input
                               value={answers.chamber}
                               onChange={(event) =>
@@ -907,6 +1051,7 @@ export default function Home() {
                               placeholder="Vollständiger Name der Kammer"
                             />
                           </div>
+                          )}
                         </>
                       )}
                     </>
@@ -921,8 +1066,9 @@ export default function Home() {
                           werden müssen.
                         </span>
                       </div>
+                      {needsQuestion("permitStatus") && (
                       <div className="field">
-                        <FieldLabel>Ist eine Erlaubnis erforderlich?</FieldLabel>
+                        <FieldLabel assessment={assessmentById.permitStatus}>Ist eine Erlaubnis erforderlich?</FieldLabel>
                         <select
                           value={answers.permitStatus}
                           onChange={(event) =>
@@ -933,9 +1079,10 @@ export default function Home() {
                           <option value="no">Nein</option>
                         </select>
                       </div>
-                      {answers.permitStatus === "yes" && (
+                      )}
+                      {answers.permitStatus === "yes" && needsQuestion("authority") && (
                         <div className="field">
-                          <FieldLabel>Zuständige Behörde</FieldLabel>
+                          <FieldLabel assessment={assessmentById.authority}>Zuständige Behörde</FieldLabel>
                           <input
                             value={answers.authority}
                             onChange={(event) =>
@@ -958,8 +1105,9 @@ export default function Home() {
                           Mediendienste.
                         </span>
                       </div>
+                      {needsQuestion("audiovisualStatus") && (
                       <div className="field">
-                        <FieldLabel>
+                        <FieldLabel assessment={assessmentById.audiovisualStatus}>
                           Trifft der Anbieter die redaktionellen Entscheidungen?
                         </FieldLabel>
                         <select
@@ -972,9 +1120,10 @@ export default function Home() {
                           <option value="no">Nein</option>
                         </select>
                       </div>
-                      {answers.audiovisualStatus === "yes" && (
+                      )}
+                      {answers.audiovisualStatus === "yes" && needsQuestion("mediaAuthority") && (
                         <div className="field">
-                          <FieldLabel>Zuständige Medienbehörde</FieldLabel>
+                          <FieldLabel assessment={assessmentById.mediaAuthority}>Zuständige Medienbehörde</FieldLabel>
                           <input
                             value={answers.mediaAuthority}
                             onChange={(event) =>
